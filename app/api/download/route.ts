@@ -64,7 +64,7 @@ export async function GET(req: NextRequest) {
 
     const { stderr } = await execAsync(
       `yt-dlp \
-        -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
+        -f "bestvideo+bestaudio/best" \
         --merge-output-format mp4 \
         --ffmpeg-location /usr/bin/ffmpeg \
         --quiet \

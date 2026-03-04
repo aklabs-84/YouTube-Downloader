@@ -84,41 +84,19 @@ export async function GET(req: NextRequest) {
     const data = JSON.parse(stdout);
     const formats: YtDlpFormat[] = data.formats || [];
 
-    // 영상 전용 MP4 (h264) — 높은 해상도 우선
+    // 영상 전용 (포맷 무관, 높은 해상도 우선)
     const videoOnly = formats
-      .filter(
-        (f) =>
-          f.vcodec !== "none" &&
-          f.vcodec &&
-          f.acodec === "none" &&
-          f.ext === "mp4" &&
-          f.url
-      )
+      .filter((f) => f.vcodec !== "none" && f.vcodec && f.acodec === "none" && f.url)
       .sort((a, b) => (b.height ?? 0) - (a.height ?? 0));
 
-    // 오디오 전용 M4A — 높은 비트레이트 우선
+    // 오디오 전용 (포맷 무관, 높은 비트레이트 우선)
     const audioOnly = formats
-      .filter(
-        (f) =>
-          f.vcodec === "none" &&
-          f.acodec !== "none" &&
-          f.acodec &&
-          (f.ext === "m4a" || f.ext === "mp4") &&
-          f.url
-      )
+      .filter((f) => f.vcodec === "none" && f.acodec !== "none" && f.acodec && f.url)
       .sort((a, b) => (b.abr ?? 0) - (a.abr ?? 0));
 
-    // 통합 MP4 fallback
+    // 통합 스트림 fallback (포맷 무관)
     const progressive = formats
-      .filter(
-        (f) =>
-          f.vcodec !== "none" &&
-          f.vcodec &&
-          f.acodec !== "none" &&
-          f.acodec &&
-          f.ext === "mp4" &&
-          f.url
-      )
+      .filter((f) => f.vcodec !== "none" && f.vcodec && f.acodec !== "none" && f.acodec && f.url)
       .sort((a, b) => (b.height ?? 0) - (a.height ?? 0));
 
     const bestVideo = videoOnly[0];
