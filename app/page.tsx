@@ -71,7 +71,9 @@ export default function Home() {
     a.click();
     document.body.removeChild(a);
 
-    setTimeout(() => setStatus("ready"), 3000);
+    // merge 모드는 서버 처리 시간이 있으므로 버튼 상태 더 오래 유지
+    const delay = videoInfo.mode === "merge" ? 180_000 : 3000;
+    setTimeout(() => setStatus("ready"), delay);
   };
 
   return (
@@ -181,7 +183,7 @@ export default function Home() {
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                     </svg>
-                    다운로드 시작 중...
+                    {videoInfo?.mode === "merge" ? "서버에서 처리 중..." : "다운로드 시작 중..."}
                   </>
                 ) : (
                   <>
@@ -196,7 +198,7 @@ export default function Home() {
               {/* Merge mode 안내 */}
               {videoInfo.mode === "merge" && (
                 <p className="mt-2 text-center text-gray-500 text-xs">
-                  영상+오디오 병합 중 — 브라우저 다운로드 창에서 진행률을 확인하세요
+                  1080p 고화질은 서버에서 다운로드+병합 후 전송됩니다 (1~3분 소요)
                 </p>
               )}
             </div>

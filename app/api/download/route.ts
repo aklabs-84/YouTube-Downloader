@@ -2,26 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { exec, spawn } from "child_process";
 import { promisify } from "util";
 import { Readable } from "stream";
+import { randomUUID } from "crypto";
+import { createReadStream } from "fs";
+import { stat, unlink } from "fs/promises";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
 const execAsync = promisify(exec);
-
-function toWebStream(nodeStream: Readable): ReadableStream<Uint8Array> {
-  return new ReadableStream({
-    start(controller) {
-      nodeStream.on("data", (chunk: Buffer) =>
-        controller.enqueue(new Uint8Array(chunk))
-      );
-      nodeStream.on("end", () => controller.close());
-      nodeStream.on("error", (err) => controller.error(err));
-    },
-    cancel() {
-      nodeStream.destroy();
-    },
-  });
-}
 
 export async function GET(req: NextRequest) {
   const watchUrl = req.nextUrl.searchParams.get("url");
@@ -39,94 +27,83 @@ export async function GET(req: NextRequest) {
   });
 
   try {
-    // yt-dlp로 직접 다운로드 URL 추출
-    // merge: "bestvideo[ext=mp4]+bestaudio[ext=m4a]" → 2줄 반환
-    // direct: "best[ext=mp4]" → 1줄 반환
-    const formatSelector =
-      mode === "merge"
-        ? "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio/best[ext=mp4]/best"
-        : "best[ext=mp4]/best";
+    // ─── Direct 모드: yt-dlp stdout 스트리밍 (낮은 화질, 즉시 시작) ───
+    if (mode === "direct") {
+      const ytdlp = spawn("yt-dlp", [
+        "-f", "best[ext=mp4]/best",
+        "--no-warnings",
+        "-o", "-",
+        watchUrl,
+      ]);
 
-    const { stdout } = await execAsync(
-      `yt-dlp -f "${formatSelector}" --get-url --no-warnings "${watchUrl}"`,
-      { maxBuffer: 5 * 1024 * 1024 }
-    );
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          ytdlp.stdout.on("data", (chunk: Buffer) =>
+            controller.enqueue(new Uint8Array(chunk))
+          );
+          ytdlp.stdout.on("end", () => controller.close());
+          ytdlp.on("error", (err) => controller.error(err));
+        },
+        cancel() { ytdlp.kill(); },
+      });
 
-    const urls = stdout.trim().split("\n").filter(Boolean);
-    const videoUrl = urls[0];
-    const audioUrl = urls[1]; // merge 모드에서만 존재
-
-    const youtubeHeaders = {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      Referer: "https://www.youtube.com/",
-      Origin: "https://www.youtube.com",
-    };
-
-    // --- Direct 모드: 단일 스트림 프록시 ---
-    if (!audioUrl) {
-      const res = await fetch(videoUrl, { headers: youtubeHeaders });
-      if (!res.ok || !res.body) {
-        return new NextResponse("영상을 가져오지 못했습니다.", { status: 502 });
-      }
-      const cl = res.headers.get("Content-Length");
-      if (cl) responseHeaders.set("Content-Length", cl);
-      return new NextResponse(res.body, { headers: responseHeaders });
+      return new NextResponse(stream, { headers: responseHeaders });
     }
 
-    // --- Merge 모드: Node.js fetch → ffmpeg pipe:3/pipe:4 → stdout ---
-    const [videoRes, audioRes] = await Promise.all([
-      fetch(videoUrl, { headers: youtubeHeaders }),
-      fetch(audioUrl, { headers: youtubeHeaders }),
-    ]);
+    // ─── Merge 모드: yt-dlp → /tmp 파일 → 스트리밍 ───
+    // YouTube DASH URL은 청크 단위로 분할 제공되어 직접 fetch가 불가능.
+    // yt-dlp가 내부적으로 Range 요청을 반복해 전체 파일을 /tmp에 저장.
+    const tmpFile = `/tmp/${randomUUID()}.mp4`;
 
-    if (!videoRes.ok || !audioRes.ok || !videoRes.body || !audioRes.body) {
-      return new NextResponse("스트림을 가져오지 못했습니다.", { status: 502 });
+    try {
+      console.log("[download] yt-dlp 다운로드 시작:", watchUrl);
+
+      await execAsync(
+        `yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
+          --merge-output-format mp4 \
+          --ffmpeg-location ffmpeg \
+          --no-warnings \
+          -o "${tmpFile}" \
+          "${watchUrl}"`,
+        { timeout: 600_000, maxBuffer: 1024 * 100 } // 10분 타임아웃
+      );
+
+      console.log("[download] 완료, 스트리밍 시작");
+
+      const { size } = await stat(tmpFile);
+      responseHeaders.set("Content-Length", size.toString());
+
+      const fileStream = createReadStream(tmpFile);
+
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          fileStream.on("data", (chunk) =>
+            controller.enqueue(new Uint8Array(chunk as Buffer))
+          );
+          fileStream.on("end", () => {
+            controller.close();
+            unlink(tmpFile).catch(() => {});
+          });
+          fileStream.on("error", (err) => {
+            controller.error(err);
+            unlink(tmpFile).catch(() => {});
+          });
+        },
+        cancel() {
+          fileStream.destroy();
+          unlink(tmpFile).catch(() => {});
+        },
+      });
+
+      return new NextResponse(stream, { headers: responseHeaders });
+    } catch (err) {
+      await unlink(tmpFile).catch(() => {});
+      throw err;
     }
-
-    // Web ReadableStream → Node.js Readable 변환
-    const videoNode = Readable.fromWeb(
-      videoRes.body as import("stream/web").ReadableStream
-    );
-    const audioNode = Readable.fromWeb(
-      audioRes.body as import("stream/web").ReadableStream
-    );
-
-    const ffmpeg = spawn(
-      "ffmpeg",
-      [
-        "-i", "pipe:3",   // 영상 스트림
-        "-i", "pipe:4",   // 오디오 스트림
-        "-c:v", "copy",   // 재인코딩 없이 복사
-        "-c:a", "copy",
-        "-movflags", "frag_keyframe+empty_moov+default_base_moof",
-        "-f", "mp4",
-        "pipe:1",
-      ],
-      { stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"] }
-    );
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    videoNode.pipe(ffmpeg.stdio[3] as any);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    audioNode.pipe(ffmpeg.stdio[4] as any);
-
-    ffmpeg.stderr?.on("data", (d: Buffer) => {
-      const line = d.toString().split("\n")[0];
-      if (line) console.log("[ffmpeg]", line);
-    });
-
-    ffmpeg.on("close", (code) => {
-      if (code !== 0) console.error(`[ffmpeg] exited ${code}`);
-    });
-
-    return new NextResponse(toWebStream(ffmpeg.stdout as Readable), {
-      headers: responseHeaders,
-    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error("download error:", msg);
-    return new NextResponse(`다운로드 오류: ${msg.slice(0, 200)}`, {
+    console.error("[download] 오류:", msg);
+    return new NextResponse(`다운로드 오류: ${msg.slice(0, 300)}`, {
       status: 500,
     });
   }
