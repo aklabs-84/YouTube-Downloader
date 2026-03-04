@@ -56,6 +56,10 @@ export async function GET(req: NextRequest) {
     const tmpBase = `/tmp/ytdl_${uid}`;
     const tmpFile = `${tmpBase}.mp4`;
 
+    const cookiesFlag = process.env.YOUTUBE_COOKIES
+      ? '--cookies /tmp/yt-cookies.txt'
+      : '';
+
     console.log("[download] 시작:", watchUrl);
 
     const { stderr } = await execAsync(
@@ -64,6 +68,7 @@ export async function GET(req: NextRequest) {
         --merge-output-format mp4 \
         --ffmpeg-location /usr/bin/ffmpeg \
         --quiet \
+        ${cookiesFlag} \
         -o "${tmpBase}.%(ext)s" \
         "${watchUrl}"`,
       { timeout: 600_000, maxBuffer: 10 * 1024 * 1024 }

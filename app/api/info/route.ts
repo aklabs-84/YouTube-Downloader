@@ -70,10 +70,15 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  // 쿠키 파일이 있으면 --cookies 플래그 추가 (봇 감지 우회)
+  const cookiesFlag = process.env.YOUTUBE_COOKIES
+    ? '--cookies /tmp/yt-cookies.txt'
+    : '';
+
   try {
     const { stdout } = await execAsync(
-      `yt-dlp --dump-json --no-playlist --no-warnings "${watchUrl}"`,
-      { maxBuffer: 10 * 1024 * 1024 } // 10MB
+      `yt-dlp --dump-json --no-playlist --no-warnings ${cookiesFlag} "${watchUrl}"`,
+      { maxBuffer: 10 * 1024 * 1024 }
     );
 
     const data = JSON.parse(stdout);
