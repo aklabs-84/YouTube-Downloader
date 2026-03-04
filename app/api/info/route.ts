@@ -20,8 +20,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "URL이 필요합니다." }, { status: 400 });
   }
 
-  const normalizedUrl = normalizeYouTubeUrl(rawUrl.trim());
-  if (!normalizedUrl) {
+  const watchUrl = normalizeYouTubeUrl(rawUrl.trim());
+  if (!watchUrl) {
     return NextResponse.json(
       {
         error:
@@ -32,72 +32,54 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const info = await ytdl.getInfo(normalizedUrl);
+    const info = await ytdl.getInfo(watchUrl);
     const formats = info.formats;
 
-    // 1) 영상 전용(video-only) MP4 포맷 — 높은 해상도 우선
+    // 영상 전용 MP4 (h264) — 높은 해상도 우선
     const videoOnlyFormats = formats
-      .filter(
-        (f) =>
-          f.hasVideo &&
-          !f.hasAudio &&
-          f.container === "mp4" &&
-          f.url
-      )
+      .filter((f) => f.hasVideo && !f.hasAudio && f.container === "mp4")
       .sort((a, b) => (b.height ?? 0) - (a.height ?? 0));
 
-    // 2) 오디오 전용(audio-only) M4A 포맷 — 높은 비트레이트 우선
+    // 오디오 전용 M4A (aac) — 높은 비트레이트 우선
     const audioOnlyFormats = formats
       .filter(
         (f) =>
           !f.hasVideo &&
           f.hasAudio &&
-          (f.container === "mp4" ||
-            f.mimeType?.startsWith("audio/mp4")) &&
-          f.url
+          (f.container === "mp4" || f.mimeType?.startsWith("audio/mp4"))
       )
       .sort((a, b) => (b.audioBitrate ?? 0) - (a.audioBitrate ?? 0));
 
-    // 3) 통합(progressive) MP4 포맷 — fallback용
+    // 통합 MP4 (fallback)
     const progressiveFormats = formats
-      .filter(
-        (f) => f.hasVideo && f.hasAudio && f.container === "mp4" && f.url
-      )
+      .filter((f) => f.hasVideo && f.hasAudio && f.container === "mp4")
       .sort((a, b) => (b.height ?? 0) - (a.height ?? 0));
 
     const bestVideo = videoOnlyFormats[0];
     const bestAudio = audioOnlyFormats[0];
     const bestProgressive = progressiveFormats[0];
 
-    // ffmpeg 병합 가능한 경우 (영상 + 오디오 분리 스트림)
+    const thumbnail =
+      info.videoDetails.thumbnails[info.videoDetails.thumbnails.length - 1]
+        ?.url;
+
     if (bestVideo && bestAudio) {
       const height = bestVideo.height ?? 0;
       const qualityLabel =
-        height >= 1080
-          ? "1080p"
-          : height >= 720
-          ? "720p"
-          : height >= 480
-          ? "480p"
-          : `${height}p`;
+        height >= 1080 ? "1080p" : height >= 720 ? "720p" : height >= 480 ? "480p" : `${height}p`;
 
       return NextResponse.json({
         title: info.videoDetails.title,
-        thumbnail:
-          info.videoDetails.thumbnails[
-            info.videoDetails.thumbnails.length - 1
-          ]?.url,
+        thumbnail,
         duration: info.videoDetails.lengthSeconds,
         quality: qualityLabel,
         width: bestVideo.width,
         height: bestVideo.height,
-        mode: "merge", // ffmpeg 병합 필요
-        videoUrl: bestVideo.url,
-        audioUrl: bestAudio.url,
+        mode: "merge",
+        watchUrl, // CDN URL 대신 watch URL만 전달
       });
     }
 
-    // fallback: progressive (영상+오디오 통합본)
     if (bestProgressive) {
       const height = bestProgressive.height ?? 0;
       const qualityLabel =
@@ -105,17 +87,13 @@ export async function GET(req: NextRequest) {
 
       return NextResponse.json({
         title: info.videoDetails.title,
-        thumbnail:
-          info.videoDetails.thumbnails[
-            info.videoDetails.thumbnails.length - 1
-          ]?.url,
+        thumbnail,
         duration: info.videoDetails.lengthSeconds,
         quality: qualityLabel,
         width: bestProgressive.width,
         height: bestProgressive.height,
-        mode: "direct", // 직접 다운로드
-        videoUrl: bestProgressive.url,
-        audioUrl: null,
+        mode: "direct",
+        watchUrl,
       });
     }
 

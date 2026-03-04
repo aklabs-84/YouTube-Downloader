@@ -10,9 +10,8 @@ interface VideoInfo {
   quality: string;
   width?: number;
   height?: number;
-  mode: "merge" | "direct"; // merge = ffmpeg, direct = 단순 프록시
-  videoUrl: string;
-  audioUrl: string | null;
+  mode: "merge" | "direct";
+  watchUrl: string; // 유튜브 watch URL (CDN URL 아님)
 }
 
 type Status = "idle" | "loading" | "ready" | "downloading" | "error";
@@ -59,14 +58,11 @@ export default function Home() {
     if (!videoInfo) return;
     setStatus("downloading");
 
-    // 브라우저 네이티브 다운로드 — Blob 메모리 없이 스트리밍 처리
     const params = new URLSearchParams({
-      videoUrl: videoInfo.videoUrl,
+      url: videoInfo.watchUrl,
+      mode: videoInfo.mode,
       title: videoInfo.title,
     });
-    if (videoInfo.audioUrl) {
-      params.set("audioUrl", videoInfo.audioUrl);
-    }
 
     const a = document.createElement("a");
     a.href = `/api/download?${params.toString()}`;
@@ -75,7 +71,6 @@ export default function Home() {
     a.click();
     document.body.removeChild(a);
 
-    // 브라우저가 다운로드를 받기 시작하면 버튼 복원
     setTimeout(() => setStatus("ready"), 3000);
   };
 
