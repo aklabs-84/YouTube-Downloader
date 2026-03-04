@@ -77,7 +77,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const { stdout } = await execAsync(
-      `yt-dlp --dump-json --no-playlist --no-warnings ${cookiesFlag} "${watchUrl}"`,
+      `yt-dlp --dump-json --no-playlist --no-warnings --no-check-formats ${cookiesFlag} "${watchUrl}"`,
       { maxBuffer: 10 * 1024 * 1024 }
     );
 

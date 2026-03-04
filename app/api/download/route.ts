@@ -67,6 +67,7 @@ export async function GET(req: NextRequest) {
         -f "bestvideo+bestaudio/best" \
         --merge-output-format mp4 \
         --ffmpeg-location /usr/bin/ffmpeg \
+        --no-check-formats \
         --quiet \
         ${cookiesFlag} \
         -o "${tmpBase}.%(ext)s" \
